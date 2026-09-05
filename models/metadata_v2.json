@@ -1,0 +1,82 @@
+{
+  "version": "v2",
+  "parent_version": "v1",
+  "trained_at": "2026-09-05T20:02:47.867271+00:00",
+  "trigger_reason": "monthly_scheduled_batch_refresh",
+  "data_summary": {
+    "total_samples": 5000,
+    "train_samples": 4000,
+    "test_samples": 1000,
+    "fraud_count_total": 25,
+    "fraud_rate": 0.005
+  },
+  "metrics": {
+    "model_name": "XGBoost",
+    "imbalance_method": "SMOTE",
+    "precision": 1.0,
+    "recall": 0.8,
+    "f1": 0.8889,
+    "pr_auc": 1.0,
+    "roc_auc": 1.0,
+    "accuracy": 0.999,
+    "confusion_matrix": [
+      [
+        995,
+        0
+      ],
+      [
+        1,
+        4
+      ]
+    ],
+    "tn": 995,
+    "fp": 0,
+    "fn": 1,
+    "tp": 4
+  },
+  "hyperparameters": {
+    "algorithm": "XGBoost",
+    "n_estimators": 130,
+    "learning_rate": 0.07,
+    "max_depth": 4,
+    "imbalance_handling": "SMOTE"
+  },
+  "features": [
+    "amount",
+    "amount_log",
+    "hour_of_day",
+    "time_since_last_tx",
+    "tx_count_1h",
+    "rolling_avg_spend_1h",
+    "rolling_spend_sum_1h",
+    "spending_deviation",
+    "V1",
+    "V2",
+    "V3",
+    "V4",
+    "V5",
+    "V6",
+    "V7",
+    "V8",
+    "V9",
+    "V10",
+    "V11",
+    "V12",
+    "V13",
+    "V14",
+    "V15",
+    "V16",
+    "V17",
+    "V18",
+    "V19",
+    "V20",
+    "V21",
+    "V22",
+    "V23",
+    "V24",
+    "V25",
+    "V26",
+    "V27",
+    "V28"
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "active_version": "v2",
+  "versions": {
+    "v2": {
+      "registered_at": "2026-09-05T20:02:47.869373+00:00",
+      "model_path": "C:\\Users\\Kamakshi Vashistha\\OneDrive\\Desktop\\software\\models\\model_v2.pkl",
+      "metadata_path": "C:\\Users\\Kamakshi Vashistha\\OneDrive\\Desktop\\software\\models\\metadata_v2.json",
+      "pr_auc": 1.0,
+      "f1": 0.8889
+    }
+  }
+}

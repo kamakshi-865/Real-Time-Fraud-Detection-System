@@ -5,7 +5,6 @@ visualize local SHAP feature attributions, and record triage decisions into SQLi
 """
 
 import sys
-import json
 from pathlib import Path
 import pandas as pd
 import streamlit as st
@@ -101,6 +100,12 @@ def get_services():
 
 db, explainer, registry = get_services()
 
+# FIX (Bug B): track the streaming offset in session_state so repeated
+# clicks on "Ingest & Score Stream" advance through new transactions
+# instead of replaying the same 30 rows and stomping reviewer decisions.
+if "stream_offset" not in st.session_state:
+    st.session_state.stream_offset = 50
+
 
 # --- Sidebar ---
 st.sidebar.markdown("### 🛡️ Sentinel System Monitor")
@@ -116,13 +121,19 @@ if st.sidebar.button("⚡ Ingest & Score Stream (30 Txs)", use_container_width=T
         engineer = FeatureEngineer(window_seconds=3600.0)
         new_flagged = 0
 
-        # Stream transactions from offset
-        for evt in streamer.stream(max_events=30, start_row=50):
+        # Fetch existing transaction IDs once so we never re-flag (and
+        # therefore never overwrite) a case that's already in the store.
+        existing_ids = {c["transaction_id"] for c in db.get_flagged_cases(status_filter="ALL")}
+
+        offset = st.session_state.stream_offset
+        for evt in streamer.stream(max_events=30, start_row=offset):
             enr = engineer.process_transaction(evt, persist=True)
             feat_dict = enr.get_feature_matrix_row()
             exp = explainer.explain_transaction(feat_dict, transaction_id=evt.transaction_id)
 
-            if exp.is_fraud_flagged:
+            # FIX (Bug B): skip cases already in flagged_cases so we never
+            # INSERT OR REPLACE over a case a reviewer has already decided.
+            if exp.is_fraud_flagged and evt.transaction_id not in existing_ids:
                 db.save_flagged_case({
                     "transaction_id": evt.transaction_id,
                     "user_id": evt.user_id,
@@ -131,13 +142,16 @@ if st.sidebar.button("⚡ Ingest & Score Stream (30 Txs)", use_container_width=T
                     "risk_score": exp.prediction_prob,
                     "status": "PENDING",
                     "shap_summary": exp.summary_reason,
-                    "shap_features": [asdict_c for asdict_c in exp.to_dict()["top_contributors"]],
+                    "shap_features": exp.to_dict()["top_contributors"],
                 })
                 new_flagged += 1
 
+        # Advance the offset so the next click streams fresh transactions.
+        st.session_state.stream_offset = offset + 30
+
         # If none flagged naturally, generate a suspicious probe for reviewer testing
         if new_flagged == 0:
-            probe_id = f"tx_probe_{len(db.get_flagged_cases()) + 1:03d}"
+            probe_id = f"tx_probe_{len(db.get_flagged_cases(status_filter='ALL')) + 1:03d}"
             probe_feats = {col: 0.0 for col in explainer.feature_names}
             probe_feats["amount"] = 875.50
             probe_feats["spending_deviation"] = 9.2
@@ -156,7 +170,7 @@ if st.sidebar.button("⚡ Ingest & Score Stream (30 Txs)", use_container_width=T
             })
             new_flagged = 1
 
-    st.sidebar.success(f"Stream processed! Flagged {new_flagged} suspicious cases.")
+    st.sidebar.success(f"Stream processed! Flagged {new_flagged} new suspicious cases.")
     st.rerun()
 
 status_filter = st.sidebar.selectbox(
@@ -194,7 +208,7 @@ else:
 
     with left_col:
         st.markdown("### 📋 Triage Queue")
-        
+
         # Build display table
         display_data = []
         for c in cases:
@@ -216,10 +230,16 @@ else:
 
     with right_col:
         st.markdown(f"### 🔍 Case Detail: `{selected_case['transaction_id']}`")
-        
-        # Risk header badge
-        risk_pct = selected_case["risk_score"] * 100
-        badge_style = "badge-fraud" if risk_pct > 80 else ("badge-pending" if risk_pct > 50 else "badge-legit")
+
+        # FIX (Bug A): badge now reflects the case's actual reviewed status,
+        # not the raw risk score, so the color and text never disagree.
+        status_badge_map = {
+            "CONFIRMED_FRAUD": "badge-fraud",
+            "FALSE_ALARM": "badge-legit",
+            "PENDING": "badge-pending",
+        }
+        badge_style = status_badge_map.get(selected_case["status"], "badge-pending")
+
         st.markdown(
             f"**User ID:** `{selected_case['user_id']}` &nbsp;|&nbsp; "
             f"**Amount:** `${selected_case['amount']:.2f}` &nbsp;|&nbsp; "
@@ -229,7 +249,7 @@ else:
         )
 
         st.progress(min(1.0, selected_case["risk_score"]))
-        st.caption(f"Predicted Fraud Probability: **{risk_pct:.2f}%**")
+        st.caption(f"Predicted Fraud Probability: **{selected_case['risk_score'] * 100:.2f}%**")
 
         # SHAP Waterfall / Attribution Breakdown
         st.markdown("#### 📊 SHAP Feature Attribution Breakdown")
@@ -265,16 +285,33 @@ else:
 
         # --- Reviewer Action Buttons ---
         st.markdown("#### ✍️ Reviewer Triage Action")
+
+        already_decided = selected_case["status"] != "PENDING"
+
+        # FIX (Bug C): if a case has already been reviewed, show its
+        # existing decision instead of live action buttons, with an
+        # explicit opt-in to override rather than a silent overwrite.
+        override = False
+        if already_decided:
+            st.warning(
+                f"This case was already reviewed as **{selected_case['status']}** "
+                f"on {selected_case.get('reviewed_at', 'an earlier date')}. "
+                f"Notes: _{selected_case.get('reviewer_notes') or 'none'}_"
+            )
+            override = st.checkbox("Override existing decision")
+
         notes_input = st.text_input(
             "Reviewer Notes / Evidence:",
             value=selected_case.get("reviewer_notes") or "",
-            placeholder="e.g., Confirmed with cardholder via SMS; unauthorized charge."
+            placeholder="e.g., Confirmed with cardholder via SMS; unauthorized charge.",
+            disabled=already_decided and not override,
         )
 
         btn_col1, btn_col2 = st.columns(2)
+        buttons_enabled = (not already_decided) or override
 
         with btn_col1:
-            if st.button("🚨 Confirmed Fraud", type="primary", use_container_width=True):
+            if st.button("🚨 Confirmed Fraud", type="primary", use_container_width=True, disabled=not buttons_enabled):
                 db.record_reviewer_decision(
                     transaction_id=selected_case["transaction_id"],
                     decision="CONFIRMED_FRAUD",
@@ -284,7 +321,7 @@ else:
                 st.rerun()
 
         with btn_col2:
-            if st.button("🛡️ False Alarm", type="secondary", use_container_width=True):
+            if st.button("🛡️ False Alarm", type="secondary", use_container_width=True, disabled=not buttons_enabled):
                 db.record_reviewer_decision(
                     transaction_id=selected_case["transaction_id"],
                     decision="FALSE_ALARM",
